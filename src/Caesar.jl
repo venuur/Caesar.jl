@@ -116,12 +116,46 @@ end
 car(s::SExpr) = s.terms[1]
 cdr(s::SExpr) = SExpr(@view s.terms[2:end])
 cadr(s::SExpr) = car(cdr(s))
+cddr(s::SExpr) = cdr(cdr(s))
 caddr(s::SExpr) = car(cdr(cdr(s)))
 null(s::SExpr) = length(s.terms) == 0
 Base.length(s::SExpr) = length(s.terms)
 Base.push!(s::SExpr, a) = push!(s.terms, a)
 Base.iterate(s::SExpr) = iterate(s.terms)
 Base.iterate(s::SExpr, i::Int) = iterate(s.terms, i)
+
+struct SchemeEnvironment
+    bindings::Dict{Symbol, Any}
+    parent::Union{SchemeEnvironment, Nothing}
+end
+SchemeEnvironment() = SchemeEnvironment(Dict{Symbol, Any}(), nothing)
+extend!(env::SchemeEnvironment, name, value) = env.bindings[name] = value
+
+function Base.get(env::SchemeEnvironment, name)
+    if haskey(env.bindings, name)
+        return env.bindings[name]
+    elseif env.parent !== nothing
+        return get(env.parent, name)
+    else
+        throw(ArgumentError("Unbound variable `$(name)`."))
+    end
+end
+
+SchemeEnvironment(parent::SchemeEnvironment) = SchemeEnvironment(Dict{Symbol, Any}(), parent)
+
+struct SchemeProcedure
+    env::SchemeEnvironment
+    formals::Array{Symbol}
+    body::SExpr
+    SchemeProcedure(parent::SchemeEnvironment, formals, body) = new(
+        SchemeEnvironment(parent), formals, body)
+end
+function (proc::SchemeProcedure)(args...)
+    for (variable, value) in zip(proc.formals, args)
+        extend!(proc.env, variable, value)
+    end
+    return interp!(proc.env, proc.body)
+end
 
 function Base.show(io::IO, s::SExpr)
     write(io, "(")
@@ -172,15 +206,8 @@ function Base.parse(token::SchemeToken)
     end
 end
 
-struct SchemeEnvironment
-    bindings::Dict{Symbol, Any}
-end
-SchemeEnvironment() = SchemeEnvironment(Dict{Symbol, Any}())
-extend!(env::SchemeEnvironment, name, value) = env.bindings[name] = value
-Base.get(env::SchemeEnvironment, name) = env.bindings[name]
-
 function interp!(env::SchemeEnvironment, s::SExpr)
-    @show env s
+    # @show env s
     result = nothing
     if null(s)
         return nothing
@@ -196,6 +223,8 @@ function interp!(env::SchemeEnvironment, s::SExpr)
         result = interp_define!(env, s)
     elseif head === :begin
         result = interp_begin!(env, s)
+    elseif head === :lambda
+        result = interp_lambda!(env, s)
     else
         # must be a procedure call
         result = interp_call!(env, s)
@@ -204,7 +233,7 @@ function interp!(env::SchemeEnvironment, s::SExpr)
 end
 
 function interp!(env::SchemeEnvironment, s::SchemeData)
-    @show env s
+    # @show env s
     if typeof(s) === SchemeData{Symbol}
         return get(env, value(s))
     else
@@ -238,6 +267,26 @@ function interp_begin!(env::SchemeEnvironment, s::SExpr)
         result = interp!(env, expr)
     end
     return result
+end
+
+function interp_lambda!(env::SchemeEnvironment, s::SExpr)
+    if length(s) < 3
+        throw(ArgumentError(
+            "`lambda` expression must have form `(lambda <formals> <body-expr>*)`."
+        ))
+    end
+
+    formals = Symbol[]
+    formals_expr = cadr(s)
+    for var in formals_expr
+        if var isa SchemeData{Symbol}
+            push!(formals, value(var))
+        else
+            throw(ArgumentError("`<formals>` must be a list of symbols."))
+        end
+    end
+    body = SExpr([SchemeData(:begin, nothing), cddr(s)...])
+    return SchemeProcedure(env, formals, body)
 end
 
 function interp_call!(env::SchemeEnvironment, s::SExpr)

@@ -1,0 +1,8 @@
+(define a 2)
+(define f (lambda () (display a) (newline) (display b) (newline) (+ a b)))
+(define b 3)
+(display (f))
+(newline)
+(define b 4)
+(display (f))
+(newline)
