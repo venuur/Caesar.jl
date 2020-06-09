@@ -1,0 +1,16 @@
+name = "Caesar"
+uuid = "dfc523db-1240-4133-9ee1-43e18db12dbd"
+authors = ["Carl Morris <carl.morris.world@outlook.com>"]
+version = "0.1.0"
+
+[deps]
+Tokenize = "0796e94c-ce3b-5d07-9a54-7f471281c624"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
