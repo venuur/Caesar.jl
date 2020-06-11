@@ -4,7 +4,9 @@ import Tokenize
 const TM = Tokenize
 const TS = Tokenize.Tokens
 
-export tokenize, parse
+using ReplMaker: initrepl
+
+export tokenize, parse, interp!, interp_sexp_string!, enable_repl
 
 struct SchemeToken
     kind
@@ -118,6 +120,7 @@ cdr(s::SExpr) = SExpr(@view s.terms[2:end])
 cadr(s::SExpr) = car(cdr(s))
 cddr(s::SExpr) = cdr(cdr(s))
 caddr(s::SExpr) = car(cdr(cdr(s)))
+cadddr(s::SExpr) = car(cdr(cdr(cdr(s))))
 null(s::SExpr) = length(s.terms) == 0
 Base.length(s::SExpr) = length(s.terms)
 Base.push!(s::SExpr, a) = push!(s.terms, a)
@@ -145,14 +148,19 @@ SchemeEnvironment(parent::SchemeEnvironment) = SchemeEnvironment(Dict{Symbol, An
 
 struct SchemeProcedure
     env::SchemeEnvironment
-    formals::Array{Symbol}
+    formals::Union{Array{Symbol}, Symbol}
     body::SExpr
     SchemeProcedure(parent::SchemeEnvironment, formals, body) = new(
         SchemeEnvironment(parent), formals, body)
 end
 function (proc::SchemeProcedure)(args...)
-    for (variable, value) in zip(proc.formals, args)
-        extend!(proc.env, variable, value)
+    if proc.formals isa Symbol
+        # varargs
+        extend!(proc.env, proc.formals, args)
+    else
+        for (variable, value) in zip(proc.formals, args)
+            extend!(proc.env, variable, value)
+        end
     end
     return interp!(proc.env, proc.body)
 end
@@ -225,6 +233,8 @@ function interp!(env::SchemeEnvironment, s::SExpr)
         result = interp_begin!(env, s)
     elseif head === :lambda
         result = interp_lambda!(env, s)
+    elseif head === :if
+        result = interp_if!(env, s)
     else
         # must be a procedure call
         result = interp_call!(env, s)
@@ -276,17 +286,49 @@ function interp_lambda!(env::SchemeEnvironment, s::SExpr)
         ))
     end
 
+    function _push_formal!(f, v, err)
+        if v isa SchemeData{Symbol}
+            push!(f, value(v))
+        else
+            throw(ArgumentError(err))
+        end
+    end
+
     formals = Symbol[]
     formals_expr = cadr(s)
-    for var in formals_expr
-        if var isa SchemeData{Symbol}
-            push!(formals, value(var))
-        else
-            throw(ArgumentError("`<formals>` must be a list of symbols."))
+    if formals_expr isa SchemeData{Symbol}
+        # (lambda <var> <body>*)
+        _push_formal!(formals, formals_expr, "`<formals>` must be a symbol.")
+    else
+        # (lambda (<var>*) <body>*)
+        for var in formals_expr
+            _push_formal!(formals, var, "`<formals>` must be a list of symbols.")
         end
     end
     body = SExpr([SchemeData(:begin, nothing), cddr(s)...])
     return SchemeProcedure(env, formals, body)
+end
+
+function interp_if!(env::SchemeEnvironment, s::SExpr)
+    if length(s) < 3 || length(s) > 4
+        throw(ArgumentError(
+            "`if` expression must have form `(if <pred> <true-case> [<false-case>])`."
+        ))
+    end
+
+    pred = cadr(s)
+    pred_value = interp!(env, pred)
+    if pred_value
+        true_case = caddr(s)
+        return interp!(env, true_case)
+    else
+        if length(s) == 4
+            false_case = cadddr(s)
+            return interp!(env, false_case)
+        end
+    end
+
+    return nothing
 end
 
 function interp_call!(env::SchemeEnvironment, s::SExpr)
@@ -294,6 +336,29 @@ function interp_call!(env::SchemeEnvironment, s::SExpr)
     args = [interp!(env, expr) for expr in cdr(s)]
     result = procedure(args...)
     return result
+end
+
+interp_sexp_string!(env, sexp_str) = interp!(env, parse(tokenize(sexp_str)))
+
+function init_env!(env)
+    Caesar.extend!(env, :+, +)
+    Caesar.extend!(env, :-, -)
+    Caesar.extend!(env, :*, *)
+    Caesar.extend!(env, :display, print)
+    Caesar.extend!(env, :newline, () -> println())
+    Caesar.extend!(env, Symbol("eq?"), ==)
+end
+
+function enable_repl()
+    env = Caesar.SchemeEnvironment()
+    init_env!(env)
+
+    initrepl((x) -> interp_sexp_string!(env, x);
+        prompt_text="caesar> ",
+        prompt_color=:blue,
+        start_key=')',
+        mode_name="Caesar_mode",
+    )
 end
 
 end # module
