@@ -9,12 +9,12 @@ using ReplMaker: initrepl
 export tokenize, parse, interp!, interp_sexp_string!, enable_repl
 
 struct SchemeToken
-    kind
-    startpos
-    endpos
-    startbyte
-    endbyte
-    val
+    kind::Any
+    startpos::Any
+    endpos::Any
+    startbyte::Any
+    endbyte::Any
+    val::Any
 end
 kind(t::SchemeToken) = t.kind
 untokenize(t::SchemeToken) = t.val
@@ -128,11 +128,20 @@ Base.iterate(s::SExpr) = iterate(s.terms)
 Base.iterate(s::SExpr, i::Int) = iterate(s.terms, i)
 
 struct SchemeEnvironment
-    bindings::Dict{Symbol, Any}
-    parent::Union{SchemeEnvironment, Nothing}
+    bindings::Dict{Symbol,Any}
+    parent::Union{SchemeEnvironment,Nothing}
 end
-SchemeEnvironment() = SchemeEnvironment(Dict{Symbol, Any}(), nothing)
+SchemeEnvironment() = SchemeEnvironment(Dict{Symbol,Any}(), nothing)
 extend!(env::SchemeEnvironment, name, value) = env.bindings[name] = value
+function Base.haskey(env::SchemeEnvironment, name)
+    if haskey(env.bindings, name)
+        return true
+    elseif env.parent !== nothing
+        return haskey(env.parent, name)
+    else
+        throw(ArgumentError("Unbound variable `$(name)`."))
+    end
+end
 
 function Base.get(env::SchemeEnvironment, name)
     if haskey(env.bindings, name)
@@ -144,14 +153,24 @@ function Base.get(env::SchemeEnvironment, name)
     end
 end
 
-SchemeEnvironment(parent::SchemeEnvironment) = SchemeEnvironment(Dict{Symbol, Any}(), parent)
+function set!(env::SchemeEnvironment, name, value)
+    if haskey(env.bindings, name)
+        return env.bindings[name] = value
+    elseif env.parent !== nothing
+        return set!(env.parent, name, value)
+    else
+        throw(ArgumentError("Unbound variable `$(name)`."))
+    end
+end
+
+SchemeEnvironment(parent::SchemeEnvironment) = SchemeEnvironment(Dict{Symbol,Any}(), parent)
 
 struct SchemeProcedure
     env::SchemeEnvironment
-    formals::Union{Array{Symbol}, Symbol}
+    formals::Union{Array{Symbol},Symbol}
     body::SExpr
-    SchemeProcedure(parent::SchemeEnvironment, formals, body) = new(
-        SchemeEnvironment(parent), formals, body)
+    SchemeProcedure(parent::SchemeEnvironment, formals, body) =
+        new(SchemeEnvironment(parent), formals, body)
 end
 function (proc::SchemeProcedure)(args...)
     if proc.formals isa Symbol
@@ -229,6 +248,8 @@ function interp!(env::SchemeEnvironment, s::SExpr)
     head = value(head)
     if head === :define
         result = interp_define!(env, s)
+    elseif head === :set!
+        result = interp_set!(env, s)
     elseif head === :begin
         result = interp_begin!(env, s)
     elseif head === :lambda
@@ -267,6 +288,25 @@ function interp_define!(env::SchemeEnvironment, s::SExpr)
     return nothing
 end
 
+function interp_set!(env::SchemeEnvironment, s::SExpr)
+    if length(s) != 3
+        throw(ArgumentError("`set!` expression must have exactly 3 terms `(set! <var> <value>)`."))
+    end
+
+    variable = cadr(s)
+    if typeof(variable) != SchemeData{Symbol}
+        throw(ArgumentError("`<var>` in `(set! <var> <value>)` must be an identifier. Got `$(variable)`"))
+    end
+    variable = value(variable)
+    if haskey(env, variable)
+        result = interp!(env, caddr(s))
+        set!(env, variable, result)
+    else
+        throw(ArgumentError("`$variable` is unbound."))
+    end
+    return nothing
+end
+
 function interp_begin!(env::SchemeEnvironment, s::SExpr)
     if length(s) < 1
         throw(ArgumentError("`begin` expression must have form `(begin <expr>*)`."))
@@ -281,9 +321,7 @@ end
 
 function interp_lambda!(env::SchemeEnvironment, s::SExpr)
     if length(s) < 3
-        throw(ArgumentError(
-            "`lambda` expression must have form `(lambda <formals> <body-expr>*)`."
-        ))
+        throw(ArgumentError("`lambda` expression must have form `(lambda <formals> <body-expr>*)`."))
     end
 
     function _push_formal!(f, v, err)
@@ -311,9 +349,7 @@ end
 
 function interp_if!(env::SchemeEnvironment, s::SExpr)
     if length(s) < 3 || length(s) > 4
-        throw(ArgumentError(
-            "`if` expression must have form `(if <pred> <true-case> [<false-case>])`."
-        ))
+        throw(ArgumentError("`if` expression must have form `(if <pred> <true-case> [<false-case>])`."))
     end
 
     pred = cadr(s)
@@ -349,15 +385,18 @@ function init_env!(env)
     Caesar.extend!(env, Symbol("eq?"), ==)
 end
 
+
+### REPL functionality
 function enable_repl()
     env = Caesar.SchemeEnvironment()
     init_env!(env)
 
-    initrepl((x) -> interp_sexp_string!(env, x);
-        prompt_text="caesar> ",
-        prompt_color=:blue,
-        start_key=')',
-        mode_name="Caesar_mode",
+    initrepl(
+        (x) -> interp_sexp_string!(env, x);
+        prompt_text = "caesar> ",
+        prompt_color = :blue,
+        start_key = ')',
+        mode_name = "Caesar_mode",
     )
 end
 
